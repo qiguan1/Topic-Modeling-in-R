@@ -1,0 +1,207 @@
+---
+title: "Topic Modeling"
+author: "Qihan Guan"
+date: "2/28/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r}
+#load data and libraries 
+
+library(textir) # to get the data
+library(maptpx) # for the topics function
+library(fpc)
+library(factoextra)
+load("congress.RData")
+```
+
+## 1.Fit K-means to the speech text of the members, comprising of the 1000 phrases, for K in 5, 10, 15, 20, 25
+
+```{r}
+fs <- scale(as.matrix( congress109Counts/rowSums(congress109Counts)))
+
+kmfs <- lapply(5*(1:5), function(k) kmeans(fs, k))
+```
+
+## 2.Use AICc and BIC to choose the K. Also use the elbow curve method to identify the most optimal value of K.
+
+```{r}
+## get AICc, BIC, and deviance for the output of kmeans
+kic <- function(fit, rule=c("A","B","C")){
+  df <- length(fit$centers) # K*dim
+  #print(df)
+  n <- sum(fit$size)
+  #print(n)
+  D <- fit$tot.withinss # deviance
+  rule=match.arg(rule)
+  if(rule=="A")
+    return(D + 2*df*n/(n-df-1)) #AICc
+  else if(rule=="B")
+    return(D + log(n)*df)#BIC
+  else
+    return(D) #Deviance
+}
+```
+
+```{r}
+## AICc and BIC
+km_aicc <- sapply(kmfs, kic, "A")
+km_bic <- sapply(kmfs, kic, "B")
+
+## Plot IC 
+plot(5*(1:5), km_aicc, xlab = "K", ylab = "IC", ylim = range(c(km_aicc, km_bic)), 
+     bty = "n", type = "l", lwd = 4, col = "red")
+abline(v=which.min(km_aicc)*5)
+lines(5*(1:5), km_bic, col = "blue", lwd = 4)
+abline(v=which.min(km_bic)*5, col="blue")
+legend(7,600000, legend = c("AICc", "BIC"), col = c("red", "blue"),
+       lty=1:2, cex=0.8)
+
+```
+IC plot gives contradicting results. AICc decreases as K gets larger while BIC increases as K gets larger. AICc suggests the optimal K is 25, while BIC suggests the optimal K is 5. 
+
+```{r}
+##Plot Elbow curve
+deviance <- sapply(kmfs, kic, "C")
+
+plot(5*(1:5), deviance,
+     type="b", pch = 19, frame = FALSE, 
+     xlab="K",
+     ylab="deviance")
+```
+Elbow curve suggests that when K=25, deviance is minimized. Elbow curve yields optimal K=25.
+
+## 3.Compare the optimal values of K obtained and explain\
+
+AICc is the lowest when K=25, while BIC is the lowest when K=5. The elbow
+curve also suggests that when K=25, deviance is the smallest. AICc aligns 
+with the elbow curves here, while BIC goes the opposite direction. A possible 
+explanation here would be that we have 529 legislators but 1000 phrases. We
+have small n but very large df. If we print out the n and df for K=5*(1:5),
+we can see that as K gets larger, the df gets much larger. This would make 
+AICc goes down while BIC goes up. I will use BIC to select the optimal K here
+as we have really small n here. AICc may overfit. Optimal K = 5.
+
+## 4.Plot the clusters based on optimal K. I have chosen optimal K=5.
+
+```{r}
+kmfs_optimal <- kmfs[[1]] #optimal K=5, the first one
+
+## Use fviz_cluster
+fviz_cluster(kmfs_optimal, data=fs, geom='point', ellipse.type="convex",
+             ggtheme = theme_bw())
+```
+
+## 5.Interpret the most significant words within that cluster (top 10)
+```{r}
+print(apply(kmfs_optimal$centers,1,function(c) colnames(fs)[order(-c)[1:10]]))
+```
+Interpretation: Significant words in cluster 1 seem to focus on environment
+and humanity, such as wildlife, fuel efficiency, water act, traumatic, etc.
+Significant words in cluster 2 seem to focus on courts, business and urban.
+Significant words in cluster 3 seem to focus on finance and social security.
+Significant words in cluster 4 seem to focus on energy and gun control, such
+as natural gas supply, buy gun, and background check. Cluster 5 seems to focus
+on immigration, tax, and civil rights.
+
+## 6. Fit a topic model for the speech counts.
+
+```{r}
+## Convert matrix 
+m <- as.simple_triplet_matrix(congress109Counts)
+
+## Choose number of topics
+n_topics <- topics(m,K=2:20, tol=10)
+## Need to choose n that gives biggest BF(n). Results yield n = 14.
+
+## ordering by topic over aggregate lift 
+summary(n_topics, n=10)
+```
+Need to choose n that gives biggest BF(n). Results yield n = 14.
+
+```{r}
+## Look at words ordered by simple in-topic prob
+print(rownames(n_topics$theta)[order(n_topics$theta[,1],decreasing = TRUE)[1:10]])
+print(rownames(n_topics$theta)[order(n_topics$theta[,2],decreasing = TRUE)[1:10]])
+
+## Look at party mean 
+dem <- colMeans(n_topics$omega[congress109Ideology$party=="D",])
+rep <- colMeans(n_topics$omega[congress109Ideology$party=="R",])
+
+sort(dem/rep) 
+```
+Topic 2,7,3,9,8,12 are republican while topic 14,11,6,10,4,13,5 are strong democratic.\
+
+To further check the validity of our model, we plot some word cloud for strong
+democratic and republican topics. 
+```{r}
+
+## Plot wordcloud 
+library(wordcloud)
+par(mfrow=c(1,2))
+
+## Republican topic
+wordcloud(row.names(n_topics$theta), 
+          freq=n_topics$theta[,2], min.freq=0.004, col="maroon")
+## Republican topic 
+wordcloud(row.names(n_topics$theta), 
+          freq=n_topics$theta[,3], min.freq=0.004, col="maroon")
+
+
+## Democratic topic
+wordcloud(row.names(n_topics$theta), 
+          freq=n_topics$theta[,5], min.freq=0.004, col="navy")
+## Democratic topic
+wordcloud(row.names(n_topics$theta), 
+          freq=n_topics$theta[,13], min.freq=0.004, col="navy")
+
+
+```
+
+### Interpretation
+By observing the word clouds from the two parties, we can see that there is a clear difference between the two parties' frequent words. The Republican topics focus on death tax, illegal immigration, etc. The Democratic topics focus on civil right, middle class, low income, etc. These observations fit the ideologies of the corresponding party. In addition, majority of words within each topic share a common theme. Our chosen model makes sense.
+
+## 7.Connect the unsupervised clusters to partisanship.
+```{r}
+tapply(congress109Ideology$party, kmfs_optimal$cluster, table)
+```
+It appears that cluster 5 is non-partisan because it shows large amount of points from both parties. Cluster 3 is strong democratic. Cluster 2 is strong republican. 
+
+To further investigate cluster 5, display top 20 words from cluster 5
+```{r}
+colnames(fs)[order(-kmfs_optimal$centers[5,])[1:20]]
+```
+For cluster 5, we can clearly see frequent words from both parties.
+
+## 8.Fit PCA model to congress counts data.
+```{r}
+m.pc <- prcomp(congress109Counts)
+m.pca_sum <- summary(m.pc)
+```
+## 9.Create a graph that summarizes the percentage of variance explained by the first 10 principle components (scree_plot).
+
+```{r}
+fviz_eig(m.pc, addlabels = TRUE, ylim=c(0,60))
+```
+From the scree plot, we can see the 'elbow' appears to be at 3. 
+
+## 10.Report results
+
+```{r}
+sum(c(23.2,17.1,6.8,4.8,4.4,4.3,3,2.8,2.3,1.9))
+```
+Total proportion of explained variance of the first 10 pc: 70.6%\
+
+If we were to eliminate all other components (everything but the first 10), we would eliminate (529-10)=519 dimensions. We would lose (100-70.6)%=29.4% variance. 
+
+
+
+
+
+
